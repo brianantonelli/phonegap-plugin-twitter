@@ -6,6 +6,13 @@
 //
 
 #import "TwitterPlugin.h"
+#ifdef PHONEGAP_FRAMEWORK
+    #import <PhoneGap/JSON.h>
+#else
+    #import "JSON.h"
+#endif
+
+#define TWITTER_URL @"http://api.twitter.com/1/"
 
 @implementation TwitterPlugin
 
@@ -22,7 +29,7 @@
     [super writeJavascript:[[PluginResult resultWithStatus:PGCommandStatus_OK messageAsInt:twitterSDKAvailable ? 1 : 0] toSuccessCallbackString:callbackId]];
 }
 
-- (void) isTwitterEnabled:(NSMutableArray*)arguments withDict:(NSMutableDictionary*)options{
+- (void) isTwitterSetup:(NSMutableArray*)arguments withDict:(NSMutableDictionary*)options{
     NSString *callbackId = [arguments objectAtIndex:0];
     BOOL canTweet = [TWTweetComposeViewController canSendTweet];
 
@@ -84,6 +91,91 @@
     }
     
     [tweetViewController release];
+}
+
+
+- (void) getPublicTimeline:(NSMutableArray*)arguments withDict:(NSMutableDictionary*)options{
+    NSString *callbackId = [arguments objectAtIndex:0];
+    NSString *url = [NSString stringWithFormat:@"%@statuses/public_timeline.json", TWITTER_URL];
+    
+	TWRequest *postRequest = [[TWRequest alloc] initWithURL:[NSURL URLWithString:url] parameters:nil requestMethod:TWRequestMethodGET];
+    [postRequest performRequestWithHandler:^(NSData *responseData, NSHTTPURLResponse *urlResponse, NSError *error) {
+        NSString *jsResponse;
+        
+		if([urlResponse statusCode] == 200) {
+
+            NSString *dataString = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding];
+            NSDictionary *dict = [dataString JSONValue];
+            jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_OK messageAsDictionary:dict] toSuccessCallbackString:callbackId];
+            [dataString release];
+		}
+		else{
+            jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_ERROR 
+                                        messageAsString:[NSString stringWithFormat:@"HTTP Error: %i", [urlResponse statusCode]]] 
+                          toErrorCallbackString:callbackId];
+		}
+        
+        [self performCallbackOnMainThreadforJS:jsResponse];        
+	}];
+    
+    [postRequest release];
+}
+
+- (void) getMentions:(NSMutableArray*)arguments withDict:(NSMutableDictionary*)options{
+    NSString *callbackId = [arguments objectAtIndex:0];
+    NSString *url = [NSString stringWithFormat:@"%@statuses/mentions.json", TWITTER_URL];
+    
+    ACAccountStore *accountStore = [[ACAccountStore alloc] init];
+    ACAccountType *accountType = [accountStore accountTypeWithAccountTypeIdentifier:ACAccountTypeIdentifierTwitter];
+    
+    [accountStore requestAccessToAccountsWithType:accountType withCompletionHandler:^(BOOL granted, NSError *error) {
+        if(granted) {
+            NSArray *accountsArray = [accountStore accountsWithAccountType:accountType];
+			// making assumption they only have one twitter account configured, should probably revist
+            if([accountsArray count] > 0) {
+                TWRequest *postRequest = [[TWRequest alloc] initWithURL:[NSURL URLWithString:url] parameters:nil requestMethod:TWRequestMethodGET];
+                [postRequest setAccount:[accountsArray objectAtIndex:0]];
+                [postRequest performRequestWithHandler:^(NSData *responseData, NSHTTPURLResponse *urlResponse, NSError *error) {
+                    NSString *jsResponse;
+                    if([urlResponse statusCode] == 200) {
+                        NSString *dataString = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding];
+                        NSDictionary *dict = [dataString JSONValue];
+                        jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_OK messageAsDictionary:dict] toSuccessCallbackString:callbackId];
+                        [dataString release];
+                    }
+                    else{
+                        jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_ERROR 
+                                                     messageAsString:[NSString stringWithFormat:@"HTTP Error: %i", [urlResponse statusCode]]] 
+                                      toErrorCallbackString:callbackId];
+                    }
+                    
+                    [self performCallbackOnMainThreadforJS:jsResponse];        
+                }];
+                [postRequest release];
+            }
+            else{
+                NSString *jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_ERROR 
+                                             messageAsString:@"No Twitter accounts available"] 
+                              toErrorCallbackString:callbackId];
+                [self performCallbackOnMainThreadforJS:jsResponse];
+            }
+        }
+        else{
+            NSString *jsResponse = [[PluginResult resultWithStatus:PGCommandStatus_ERROR 
+                                         messageAsString:@"Access to Twitter accounts denied by user"] 
+                          toErrorCallbackString:callbackId];
+            [self performCallbackOnMainThreadforJS:jsResponse];
+        }
+    }];
+
+    [accountStore release];
+}
+
+// The JS must run on the main thread because you can't make a uikit call (uiwebview) from another thread (what twitter does for calls)
+- (void) performCallbackOnMainThreadforJS:(NSString*)javascript{
+    [super performSelectorOnMainThread:@selector(writeJavascript:) 
+                            withObject:javascript
+                         waitUntilDone:YES];
 }
 
 @end
